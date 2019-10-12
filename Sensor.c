@@ -1,28 +1,27 @@
-/*
- * BinClock.c
- * Jarrod Olivier
- * Modified for EEE3095S/3096S by Keegan Crankshaw
- * August 2019
- * 
- * <JRDMUH002> <DDNAAD001>
- * 17 August 2019
+/* * BinClock.c * Jarrod Olivier * Modified for EEE3095S/3096S by Keegan 
+ Crankshaw * August 2019 * * <JRDMUH002> <DDNAAD001> * 08 OCTOBER 2019
 */
 
 #include <wiringPi.h>
 #include <wiringPiI2C.h>
 #include <stdio.h> //For printf functions
 #include <stdlib.h> // For system functions
-
-#include "BinClock.h"
+#include <mcp3004.h>//for adc
+#include "Sensor.h"
 #include "CurrentTime.h"
 
 //Global variables
-int hours, mins, secs;
+int sample_time=1;
+int hours, mins, secs; //use for system
 long lastInterruptTime = 0; //Used for button debounce
 int RTC; //Holds the RTC instance
-
+int alarm_ready;
+int alarm_timer;
 int HH,MM,SS;
-
+int pot;
+int ldr;
+float temp_sensor;
+int RTC_hours, RTC_mins, RTC_secs;
 void initGPIO(void){
 	/* 
 	 * Sets GPIO using wiringPi pins. see pinout.xyz for specific wiringPi pins
@@ -33,19 +32,12 @@ void initGPIO(void){
 	wiringPiSetup(); //This is the default mode. If you want to change pinouts, be aware
 	
 	RTC = wiringPiI2CSetup(RTCAddr); //Set up the RTC
-	
-	//Set up the LEDS
-	for(int i; i < sizeof(LEDS)/sizeof(LEDS[0]); i++){
-	    pinMode(LEDS[i], OUTPUT);
-	}
-	
-	//Set Up the Seconds LED for PWM
-	//Write your logic here
-	 pinMode(1, PWM_OUTPUT); //added this
-    
+//setup the ADC	
+	mcp3004Setup(BASE, SPI_ADC);
 
-	printf("LEDS done\n");
-	
+
+
+
 	//Set up the Buttons
 	for(int j; j < sizeof(BTNS)/sizeof(BTNS[0]); j++){
 		pinMode(BTNS[j], INPUT);
@@ -54,7 +46,7 @@ void initGPIO(void){
 	
 	//Attach interrupts to Buttons
 	//Write your logic here
-	wiringPiISR(30, INT_EDGE_RISING, &minInc); //sets up interrupt on pin30
+	wiringPiISR(0, INT_EDGE_RISING, &reset); //sets up interrupt on pin30
 	wiringPiISR(5, INT_EDGE_RISING, &hourInc);//sets up interrupt on pin5
 	printf("BTNS done\n");
 	printf("Setup done\n");
@@ -73,26 +65,46 @@ int main(void){
 	// Repeat this until we shut down
 	for (;;){
 
-		//Fetch the time from the RTC
-		//Write your logic here
-		hours = wiringPiI2CReadReg8(RTC, HOUR); //retrieves hours value
-		mins = wiringPiI2CReadReg8(RTC, MIN); //retrieves minutes value
-		secs = wiringPiI2CReadReg8(RTC, SEC)-0x80; //retrieves seconds value but subtracts the bit assigned to enable crystal
-
-		//Function calls to toggle LEDs		//Write your logic here
-				// Print out the time we have stored on our RTC
-		printf("The current time is: %x:%x:%x\n", hours, mins, secs);
-		
-		lightHours(hFormat(hexCompensation(hours))); //converts to readable format for leds, converts to 12 hour time and displays it on leds
-		
-		
-		lightMins( (hexCompensation(mins))); //converts to readable format for leds and displays it on the leds
-		secPWM(hexCompensation(secs));//converts to readable format for led and applies pwm to the led
-		//using a delay to make our program "less CPU hungry"
-		delay(1000); //milliseconds
+		updateTime(); //fetches RTC Time
+		sensors(); //updates sensor values
+		delay(1000*sample_time); //how often the program samples
 	}
 	return 0;
 }
+
+
+//check alarm status and take appropriate actions
+void checkAlarm(void){
+	if (alarm_ready==0){ //alarm has been tripped
+	alarm_timer = wiringPiI2CReadReg8(RTC, SEC)-0x80; //increments alarm timer
+	if (alarm_timer>=180){ //has 3 minutes passed?
+		alarm_ready=1;}//alarm is ready to sound again
+		}
+}
+
+void sensors(void){
+                pot = analogRead(BASE); //834 is my max value for potentiometer
+                pot = (int) pot;
+                ldr = analogRead(BASE+1);
+                temp_sensor = analogRead(BASE+2);
+                temp_sensor = (temp_sensor * (3.3/1024)-0.5)/0.01;
+                printf("POT: %d | ",pot);
+                printf("LDR: %d | ",ldr);
+                printf("TEMP: %.1f1 C\n ",temp_sensor);}
+
+void updateTime(void){
+//Fetch the time from the RTC
+                RTC_hours = wiringPiI2CReadReg8(RTC, HOUR); //retrieves hours v$
+                RTC_mins = wiringPiI2CReadReg8(RTC, MIN); //retrieves minutes v$
+                RTC_secs = wiringPiI2CReadReg8(RTC, SEC)-0x80; //retrieves seco$}
+printf("The system time is: %x:%x:%x\n", RTC_hours, RTC_mins, RTC_secs);}
+
+void reset(void){
+	printf("beep beep");}
+
+
+//printf("Actual time is: %x: %x %x\n")
+
 
 /*
  * Change the hour format to 12 hours
@@ -108,42 +120,6 @@ int hFormat(int hours){
 	return (int)hours;
 }
 
-/*
- * Turns on corresponding LED's for hours
- */
-void lightHours(int units){
-	// Write your logic to light up the hour LEDs here
-
-//	
-	for (int i=0;i<=3;i++){ //
-		digitalWrite(LEDS[i],(units & 1<<i));
-	} //iterates through 'LEDS' array so that we are only working with the 'hours' section of the array.
-}          // bitshifts the given unit in order to set individual bits to correct indices of array
-
-/*
- * Turn on the Minute LEDs
- */
-void lightMins(int units){
-	//Write your logic to light up the minute LEDs here
-       for (int j=4, k =0;j<=9 && k<=5;j++,k++){ //iterates through minutes part of 'LEDS' array
-                digitalWrite(LEDS[j],(units & 1<<k)); // sets individual bits of unit to correct bits of array
-
-}
-
-}
-
-
-/*
- * PWM on the Seconds LED
- * The LED should have 60 brightness levels
- * The LED should be "off" at 0 seconds, and fully bright at 59 seconds
- */
-void secPWM(int units){
-	// Write your logic here
-	secs = units*1024;
-	secs =  (int)  secs/60; //this fixes the ratio so that maximum occurs after 60 seconds and is linear in between 0 and 60
-    	pwmWrite(SECS,secs);    //sets pwm  based on above ratio at a given instant
-}
 
 /*
  * hexCompensation
